@@ -459,8 +459,9 @@ const FormularioPDF = () => {
                       <input type="email" className="form-control" id="correo" name="correo" value={formData.correo} onChange={handleChange} />
                     </div>
                     <div className="col-md-6">
-                      <label htmlFor="telefono" className="form-label fw-semibold">Teléfono con código de área (Opcional)</label>
-                      <input type="tel" className="form-control" id="telefono" name="telefono" value={formData.telefono} onChange={handleChange} />
+                      <label htmlFor="telefono" className="form-label fw-semibold">Número de teléfono *</label>
+                      <input type="tel" className="form-control" id="telefono" name="telefono" value={formData.telefono} onChange={handleChange} required minLength="9" maxLength="9" pattern="[0-9]{9}" />
+                      <div className="invalid-feedback">Por favor ingrese un teléfono válido de 9 dígitos.</div>
                     </div>
                   </div>
 
