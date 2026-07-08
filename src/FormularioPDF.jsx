@@ -4,8 +4,16 @@ import { PDFDocument, rgb } from 'pdf-lib';
 import LZString from 'lz-string';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
+// Función para sanitizar inputs y evitar inyección
+const sanitize = (str) => {
+  if (!str) return '';
+  return str.replace(/[<>]/g, '').trim();
+};
+
 const FormularioPDF = () => {
   const [step, setStep] = useState(1);
+  const [mode, setMode] = useState('manual');
+  
   const [formData, setFormData] = useState({
     nombre: '',
     direccion: '',
@@ -15,7 +23,11 @@ const FormularioPDF = () => {
     fecha: '',
     voluntariado: '',
     otroVoluntariado: '',
-    monto: '',
+    // Monto eliminado
+    // Campos manuales para el representante (opcionales)
+    nombreRepresentante: '',
+    telefonoRepresentante: '',
+    correoRepresentante: '',
     firmaData: null
   });
   
@@ -23,8 +35,18 @@ const FormularioPDF = () => {
   const [toastMessage, setToastMessage] = useState('');
   const sigCanvas = useRef(null);
 
-  // Load from URL params if present
   useEffect(() => {
+    // Determinar el modo según la URL (hash o query params, o terminación)
+    const url = window.location.href.toLowerCase();
+    let currentMode = 'manual';
+    
+    if (url.endsWith('ppc') || url.includes('?ppc') || url.includes('#ppc') || url.includes('?id=ppc') || url.includes('?ref=ppc')) {
+      currentMode = 'ppc';
+    } else if (url.endsWith('pp') || url.includes('?pp') || url.includes('#pp') || url.includes('?id=pp') || url.includes('?ref=pp')) {
+      currentMode = 'pp';
+    }
+    setMode(currentMode);
+
     const params = new URLSearchParams(window.location.search);
     const data = params.get('data');
     if (data) {
@@ -32,7 +54,8 @@ const FormularioPDF = () => {
         const decompressed = LZString.decompressFromEncodedURIComponent(data);
         if (decompressed) {
           const parsed = JSON.parse(decompressed);
-          setFormData(parsed);
+          // Ensure we merge to avoid undefined fields
+          setFormData(prev => ({...prev, ...parsed}));
           
           if (parsed.firmaData && sigCanvas.current) {
             setTimeout(() => {
@@ -44,7 +67,7 @@ const FormularioPDF = () => {
         console.error("Failed to parse URL data");
       }
     }
-  }, [step]); // Re-run when step changes to ensure canvas is mounted if moving to step 2
+  }, [step]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -75,11 +98,28 @@ const FormularioPDF = () => {
       ? sigCanvas.current.toData() 
       : null;
       
-    const finalData = { ...formData, firmaData: currentFirmaData };
-    const compressedData = LZString.compressToEncodedURIComponent(JSON.stringify(finalData));
+    // Sanitizamos todos los datos antes de exportarlos a la URL
+    const safeData = { 
+      nombre: sanitize(formData.nombre),
+      direccion: sanitize(formData.direccion),
+      correo: sanitize(formData.correo),
+      telefono: sanitize(formData.telefono),
+      ubicacion: sanitize(formData.ubicacion),
+      fecha: sanitize(formData.fecha),
+      voluntariado: sanitize(formData.voluntariado),
+      otroVoluntariado: sanitize(formData.otroVoluntariado),
+      nombreRepresentante: sanitize(formData.nombreRepresentante),
+      telefonoRepresentante: sanitize(formData.telefonoRepresentante),
+      correoRepresentante: sanitize(formData.correoRepresentante),
+      firmaData: currentFirmaData 
+    };
     
-    // Create a robust URL that survives deployment subfolders
-    const url = `${window.location.origin}${window.location.pathname}?data=${compressedData}`;
+    const compressedData = LZString.compressToEncodedURIComponent(JSON.stringify(safeData));
+    
+    // Mantenemos los parámetros extra de la URL actual si existen
+    const currentUrl = new URL(window.location.href);
+    currentUrl.searchParams.set('data', compressedData);
+    const url = currentUrl.toString();
     
     navigator.clipboard.writeText(url).then(() => {
       setToastMessage('Enlace copiado al portapapeles');
@@ -93,7 +133,6 @@ const FormularioPDF = () => {
 
   const fillPDF = async () => {
     try {
-      // Use relative path for robust deployment
       const url = 'OMSE%202026.pdf';
       const existingPdfBytes = await fetch(url).then(res => res.arrayBuffer());
       const pdfDoc = await PDFDocument.load(existingPdfBytes);
@@ -106,12 +145,13 @@ const FormularioPDF = () => {
 
       const drawFieldText = (fieldName, text) => {
         if (!text) return;
+        const safeText = sanitize(text);
         try {
           const field = form.getTextField(fieldName);
           const widgets = field.acroField.getWidgets();
           if (widgets.length > 0) {
             const rect = widgets[0].getRectangle();
-            firstPage.drawText(text, {
+            firstPage.drawText(safeText, {
               x: rect.x + 2,
               y: rect.y + 4,
               size: 11,
@@ -142,7 +182,7 @@ const FormularioPDF = () => {
         }
       };
 
-      let formattedDate = formData.fecha;
+      let formattedDate = sanitize(formData.fecha);
       if (formattedDate) {
         const parts = formattedDate.split('-');
         if (parts.length === 3) {
@@ -156,22 +196,33 @@ const FormularioPDF = () => {
       drawFieldText('Teléfono con código de área', formData.telefono);
       drawFieldText('Ubicación del voluntariado por ejemplo barrio o estaca', formData.ubicacion);
       drawFieldText('Fecha de la orientación', formattedDate);
-      drawFieldText('Monto de gasto aprobado', formData.monto ? `S/ ${formData.monto}` : '');
 
-      drawFieldText('Nombre del representante autorizado de seminarios e institutos', 'Raúl Enrique León Elias');
-      drawFieldText('Teléfono con código de área_2', '969 337 257');
-      drawFieldText('Dirección de correo electrónico_2', 'leonre@churchofjesuschrist.org');
+      // Data de Representante dependiendo del modo
+      let repName = formData.nombreRepresentante;
+      let repPhone = formData.telefonoRepresentante;
+      let repEmail = formData.correoRepresentante;
 
-      if (formData.voluntariado === 'Maestro de seminario') drawCheckbox('Maestro de seminario');
-      else if (formData.voluntariado === 'Maestro de instituto') drawCheckbox('Maestro de instituto');
-      else if (formData.voluntariado === 'Supervisor de estaca') drawCheckbox('Supervisor de estaca');
-      else if (formData.voluntariado === 'Otro') {
+      if (mode === 'ppc') {
+        repName = 'Raúl Enrique León Elias';
+        repPhone = '969 337 257';
+        repEmail = 'leonre@churchofjesuschrist.org';
+      } else if (mode === 'pp') {
+        repName = 'Roger Michael Ramirez Tolero';
+        repPhone = '965 379 512';
+        repEmail = 'ramirezrm@ChurchofJesusChrist.org';
+      }
+
+      drawFieldText('Nombre del representante autorizado de seminarios e institutos', repName);
+      drawFieldText('Teléfono con código de área_2', repPhone);
+      drawFieldText('Dirección de correo electrónico_2', repEmail);
+
+      const safeVoluntariado = sanitize(formData.voluntariado);
+      if (safeVoluntariado === 'Maestro de seminario') drawCheckbox('Maestro de seminario');
+      else if (safeVoluntariado === 'Maestro de instituto') drawCheckbox('Maestro de instituto');
+      else if (safeVoluntariado === 'Supervisor de estaca') drawCheckbox('Supervisor de estaca');
+      else if (safeVoluntariado === 'Otro') {
         drawCheckbox('Otro');
-        const fields = form.getFields();
-        const undefinedField = fields.find(f => f.getName() === 'undefined' && f.constructor.name === 'PDFTextField');
-        if (undefinedField) {
-          drawFieldText('undefined', formData.otroVoluntariado);
-        }
+        drawFieldText('undefined', formData.otroVoluntariado);
       }
 
       // Manual trimming function to perfectly crop white space
@@ -269,7 +320,7 @@ const FormularioPDF = () => {
       const blob = new Blob([pdfBytes], { type: 'application/pdf' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = `OMSE_Completado_${formData.nombre.replace(/\s+/g, '_') || 'Voluntario'}.pdf`;
+      link.download = `OMSE_Completado_${sanitize(formData.nombre).replace(/\s+/g, '_') || 'Voluntario'}.pdf`;
       link.click();
       
     } catch (error) {
@@ -394,24 +445,22 @@ const FormularioPDF = () => {
                   <h4 className="mb-4 text-primary border-bottom pb-2">Información Personal</h4>
                   <div className="row g-3 mb-4">
                     <div className="col-md-12">
-                      <label htmlFor="nombre" className="form-label fw-semibold">Nombre de la persona llamada</label>
+                      <label htmlFor="nombre" className="form-label fw-semibold">Nombre de la persona llamada *</label>
                       <input type="text" className="form-control" id="nombre" name="nombre" value={formData.nombre} onChange={handleChange} required />
                       <div className="invalid-feedback">Por favor ingrese el nombre.</div>
                     </div>
                     <div className="col-md-12">
-                      <label htmlFor="direccion" className="form-label fw-semibold">Dirección postal</label>
+                      <label htmlFor="direccion" className="form-label fw-semibold">Dirección postal *</label>
                       <input type="text" className="form-control" id="direccion" name="direccion" value={formData.direccion} onChange={handleChange} required />
                       <div className="invalid-feedback">Por favor ingrese la dirección postal.</div>
                     </div>
                     <div className="col-md-6">
-                      <label htmlFor="correo" className="form-label fw-semibold">Correo electrónico</label>
-                      <input type="email" className="form-control" id="correo" name="correo" value={formData.correo} onChange={handleChange} required />
-                      <div className="invalid-feedback">Por favor ingrese un correo válido.</div>
+                      <label htmlFor="correo" className="form-label fw-semibold">Correo electrónico (Opcional)</label>
+                      <input type="email" className="form-control" id="correo" name="correo" value={formData.correo} onChange={handleChange} />
                     </div>
                     <div className="col-md-6">
-                      <label htmlFor="telefono" className="form-label fw-semibold">Teléfono con código de área</label>
-                      <input type="tel" className="form-control" id="telefono" name="telefono" value={formData.telefono} onChange={handleChange} required />
-                      <div className="invalid-feedback">Por favor ingrese el teléfono.</div>
+                      <label htmlFor="telefono" className="form-label fw-semibold">Teléfono con código de área (Opcional)</label>
+                      <input type="tel" className="form-control" id="telefono" name="telefono" value={formData.telefono} onChange={handleChange} />
                     </div>
                   </div>
 
@@ -419,18 +468,18 @@ const FormularioPDF = () => {
                   <h4 className="mb-4 text-primary border-bottom pb-2">Detalles del Voluntariado</h4>
                   <div className="row g-3 mb-4">
                     <div className="col-md-6">
-                      <label htmlFor="ubicacion" className="form-label fw-semibold">Ubicación (Barrio o Estaca)</label>
+                      <label htmlFor="ubicacion" className="form-label fw-semibold">Ubicación (Barrio o Estaca) *</label>
                       <input type="text" className="form-control" id="ubicacion" name="ubicacion" value={formData.ubicacion} onChange={handleChange} required />
                       <div className="invalid-feedback">Por favor ingrese la ubicación.</div>
                     </div>
                     <div className="col-md-6">
-                      <label htmlFor="fecha" className="form-label fw-semibold">Fecha de orientación</label>
+                      <label htmlFor="fecha" className="form-label fw-semibold">Fecha de orientación *</label>
                       <input type="date" className="form-control" id="fecha" name="fecha" value={formData.fecha} onChange={handleChange} required />
                       <div className="invalid-feedback">Por favor seleccione la fecha.</div>
                     </div>
                     
                     <div className="col-md-12">
-                      <label className="form-label fw-semibold d-block">Tipo de voluntariado</label>
+                      <label className="form-label fw-semibold d-block">Tipo de voluntariado *</label>
                       <div className="form-check form-check-inline">
                         <input className="form-check-input" type="radio" name="voluntariado" id="volSeminario" value="Maestro de seminario" checked={formData.voluntariado === 'Maestro de seminario'} onChange={handleChange} required />
                         <label className="form-check-label" htmlFor="volSeminario">Maestro de seminario</label>
@@ -455,19 +504,31 @@ const FormularioPDF = () => {
                         </div>
                       )}
                     </div>
-                    
-                    <div className="col-md-6 mt-4">
-                      <label htmlFor="monto" className="form-label fw-semibold">Monto de gasto aprobado</label>
-                      <div className="input-group">
-                        <span className="input-group-text">S/</span>
-                        <input type="number" className="form-control" id="monto" name="monto" value={formData.monto} onChange={handleChange} required min="0" step="0.01" />
-                        <div className="invalid-feedback">Por favor ingrese un monto válido.</div>
-                      </div>
-                    </div>
                   </div>
 
+                  {/* Representante Autorizado (Condicional) */}
+                  {mode === 'manual' && (
+                    <>
+                      <h4 className="mb-4 text-primary border-bottom pb-2">Información de Seminarios e Institutos (Opcional)</h4>
+                      <div className="row g-3 mb-4">
+                        <div className="col-md-12">
+                          <label htmlFor="nombreRepresentante" className="form-label fw-semibold">Nombre del representante</label>
+                          <input type="text" className="form-control" id="nombreRepresentante" name="nombreRepresentante" value={formData.nombreRepresentante} onChange={handleChange} placeholder="Ej. Juan Pérez" />
+                        </div>
+                        <div className="col-md-6">
+                          <label htmlFor="correoRepresentante" className="form-label fw-semibold">Correo del representante</label>
+                          <input type="email" className="form-control" id="correoRepresentante" name="correoRepresentante" value={formData.correoRepresentante} onChange={handleChange} placeholder="Ej. correo@ejemplo.com" />
+                        </div>
+                        <div className="col-md-6">
+                          <label htmlFor="telefonoRepresentante" className="form-label fw-semibold">Teléfono del representante</label>
+                          <input type="tel" className="form-control" id="telefonoRepresentante" name="telefonoRepresentante" value={formData.telefonoRepresentante} onChange={handleChange} placeholder="Ej. 999 999 999" />
+                        </div>
+                      </div>
+                    </>
+                  )}
+
                   {/* Firma Digital */}
-                  <h4 className="mb-4 text-primary border-bottom pb-2">Firma Digital</h4>
+                  <h4 className="mb-4 text-primary border-bottom pb-2">Firma Digital *</h4>
                   <div className="row g-3 mb-5">
                     <div className="col-md-12">
                       <div className="card border bg-light">
@@ -479,7 +540,7 @@ const FormularioPDF = () => {
                               className: 'signature-canvas w-100', 
                               style: { height: '200px', cursor: 'crosshair', touchAction: 'none' } 
                             }} 
-                            penColor="#001999" /* Lapicero azul */
+                            penColor="#001999"
                           />
                         </div>
                         <div className="card-footer bg-light border-top-0 text-end py-2">
