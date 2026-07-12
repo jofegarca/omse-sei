@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import SignatureCanvas from 'react-signature-canvas';
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import LZString from 'lz-string';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
@@ -8,6 +8,19 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 const sanitize = (str) => {
   if (!str) return '';
   return str.replace(/[<>]/g, '').trim();
+};
+
+// Función segura y universal para leer variables de la URL (compatible con navegadores antiguos)
+const getQueryParam = (param) => {
+  const query = window.location.search.substring(1);
+  const vars = query.split("&");
+  for (let i = 0; i < vars.length; i++) {
+    const pair = vars[i].split("=");
+    if (pair[0] === param) {
+      return decodeURIComponent(pair[1] || "");
+    }
+  }
+  return null;
 };
 
 const FormularioPDF = () => {
@@ -23,7 +36,6 @@ const FormularioPDF = () => {
     fecha: '',
     voluntariado: '',
     otroVoluntariado: '',
-    // Monto eliminado
     // Campos manuales para el representante (opcionales)
     nombreRepresentante: '',
     telefonoRepresentante: '',
@@ -40,21 +52,31 @@ const FormularioPDF = () => {
     const url = window.location.href.toLowerCase();
     let currentMode = 'manual';
     
-    if (url.endsWith('ppc') || url.includes('?ppc') || url.includes('#ppc') || url.includes('?id=ppc') || url.includes('?ref=ppc')) {
+    if (url.endsWith('ppc') || url.includes('?ppc') || url.includes('#ppc') || url.includes('?id=ppc') || url.includes('?ref=ppc') || url.includes('&ref=ppc')) {
       currentMode = 'ppc';
-    } else if (url.endsWith('pp') || url.includes('?pp') || url.includes('#pp') || url.includes('?id=pp') || url.includes('?ref=pp')) {
+    } else if (url.endsWith('pp') || url.includes('?pp') || url.includes('#pp') || url.includes('?id=pp') || url.includes('?ref=pp') || url.includes('&ref=pp')) {
       currentMode = 'pp';
     }
     setMode(currentMode);
 
-    const params = new URLSearchParams(window.location.search);
-    const data = params.get('data');
+    const data = getQueryParam('data');
     if (data) {
       try {
         const decompressed = LZString.decompressFromEncodedURIComponent(data);
         if (decompressed) {
           const parsed = JSON.parse(decompressed);
-          // Ensure we merge to avoid undefined fields
+          
+          // Reconstruir la firma comprimida (si existe)
+          let reconstructedFirma = null;
+          if (parsed.firmaComp) {
+            reconstructedFirma = parsed.firmaComp.map(stroke => ({
+              color: stroke.c || "#001999",
+              points: stroke.p.map(pt => ({ x: pt[0], y: pt[1], time: Date.now() }))
+            }));
+            parsed.firmaData = reconstructedFirma;
+          }
+
+          // Merge para evitar campos undefined
           setFormData(prev => ({...prev, ...parsed}));
           
           if (parsed.firmaData && sigCanvas.current) {
@@ -98,6 +120,18 @@ const FormularioPDF = () => {
       ? sigCanvas.current.toData() 
       : null;
       
+    // Comprimir radicalmente la firma para que el enlace sea muy corto y soporte WhatsApp
+    let firmaComprimida = null;
+    if (currentFirmaData) {
+      firmaComprimida = currentFirmaData.map(stroke => ({
+        c: stroke.color, // solo color
+        // Solo guardar 1 de cada 2 puntos y sin el atributo "time", convirtiendolo en arreglo simple [x,y]
+        p: stroke.points
+          .filter((_, i) => i % 2 === 0)
+          .map(pt => [Math.round(pt.x), Math.round(pt.y)])
+      }));
+    }
+
     // Sanitizamos todos los datos antes de exportarlos a la URL
     const safeData = { 
       nombre: sanitize(formData.nombre),
@@ -111,15 +145,17 @@ const FormularioPDF = () => {
       nombreRepresentante: sanitize(formData.nombreRepresentante),
       telefonoRepresentante: sanitize(formData.telefonoRepresentante),
       correoRepresentante: sanitize(formData.correoRepresentante),
-      firmaData: currentFirmaData 
+      firmaComp: firmaComprimida // Enviamos la version ligera
     };
     
     const compressedData = LZString.compressToEncodedURIComponent(JSON.stringify(safeData));
     
-    // Mantenemos los parámetros extra de la URL actual si existen
-    const currentUrl = new URL(window.location.href);
-    currentUrl.searchParams.set('data', compressedData);
-    const url = currentUrl.toString();
+    // Método ultra-compatible de generar la URL final
+    let baseUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+    let url = baseUrl + "?data=" + compressedData;
+    // Si hay que mantener el modo, agregarlo
+    if (mode === 'ppc') url += "&ref=ppc";
+    else if (mode === 'pp') url += "&ref=pp";
     
     navigator.clipboard.writeText(url).then(() => {
       setToastMessage('Enlace copiado al portapapeles');
@@ -142,6 +178,7 @@ const FormularioPDF = () => {
       const firstPage = pages[0];
       
       const blueColor = rgb(0, 0.1, 0.6);
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
       const drawFieldText = (fieldName, text) => {
         if (!text) return;
@@ -151,10 +188,20 @@ const FormularioPDF = () => {
           const widgets = field.acroField.getWidgets();
           if (widgets.length > 0) {
             const rect = widgets[0].getRectangle();
+            
+            // Lógica de auto-ajuste de tamaño de letra (responsive text size)
+            let fontSize = 11;
+            let textWidth = font.widthOfTextAtSize(safeText, fontSize);
+            while (textWidth > (rect.width - 4) && fontSize > 5) {
+              fontSize -= 0.5;
+              textWidth = font.widthOfTextAtSize(safeText, fontSize);
+            }
+
             firstPage.drawText(safeText, {
               x: rect.x + 2,
-              y: rect.y + 4,
-              size: 11,
+              y: rect.y + (rect.height / 2) - (fontSize / 2.5), // Centrado vertical dinámico
+              size: fontSize,
+              font: font,
               color: blueColor
             });
             field.setText('');
@@ -530,10 +577,16 @@ const FormularioPDF = () => {
 
                   {/* Firma Digital */}
                   <h4 className="mb-4 text-primary border-bottom pb-2">Firma Digital *</h4>
-                  <div className="row g-3 mb-5">
+                  <div className="row g-3 mb-4">
                     <div className="col-md-12">
-                      <div className="card border bg-light">
-                        <div className="card-body p-0 d-flex justify-content-center bg-white" style={{ borderRadius: 'var(--bs-border-radius)' }}>
+                      <div className="card border bg-light shadow-sm">
+                        <div className="card-header bg-white d-flex justify-content-between align-items-center py-2">
+                          <span className="text-muted small fw-semibold"><i className="bi bi-pen me-1"></i> Área de firma</span>
+                          <button type="button" className="btn btn-sm btn-outline-danger py-1" onClick={clearSignature} title="Limpiar y volver a firmar">
+                            <i className="bi bi-eraser-fill"></i> Limpiar
+                          </button>
+                        </div>
+                        <div className="card-body p-0 d-flex justify-content-center bg-white" style={{ borderRadius: '0 0 var(--bs-border-radius) var(--bs-border-radius)' }}>
                           <SignatureCanvas 
                             ref={sigCanvas} 
                             onEnd={handleSignatureEnd}
@@ -544,23 +597,18 @@ const FormularioPDF = () => {
                             penColor="#001999"
                           />
                         </div>
-                        <div className="card-footer bg-light border-top-0 text-end py-2">
-                          <button type="button" className="btn btn-sm btn-outline-danger" onClick={clearSignature}>
-                            <i className="bi bi-eraser-fill me-1"></i>Limpiar Firma
-                          </button>
-                        </div>
                       </div>
                       <small className="text-muted mt-2 d-block">Por favor, firme dentro del recuadro usando su cursor o el dedo en pantallas táctiles.</small>
                     </div>
                   </div>
 
                   {/* Botones de Acción */}
-                  <div className="d-flex justify-content-between align-items-center border-top pt-4 mt-2">
-                    <button type="button" className="btn btn-outline-secondary px-4 fw-semibold shadow-sm" onClick={handleCopyLink}>
+                  <div className="d-flex justify-content-between align-items-center border-top pt-4 mt-5">
+                    <button type="button" className="btn btn-outline-secondary px-4 py-2 fw-semibold shadow-sm" onClick={handleCopyLink}>
                       <i className="bi bi-link-45deg me-1"></i> Copiar Vínculo
                     </button>
-                    <button type="submit" className="btn btn-primary px-4 fw-semibold shadow-sm">
-                      Descargar PDF <i className="bi bi-file-earmark-pdf-fill ms-1"></i>
+                    <button type="submit" className="btn btn-primary px-5 py-2 fw-bold shadow-sm d-flex align-items-center">
+                      Descargar PDF <i className="bi bi-file-earmark-pdf-fill ms-2 fs-5"></i>
                     </button>
                   </div>
                 </form>
