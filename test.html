@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <canvas id="c" width="400" height="200" style="border: 1px solid black;"></canvas>
+  <button id="draw">Draw Manually</button>
+  <button id="export">Export to JSON</button>
+  <button id="import">Import from custom JSON</button>
+  
+  <script src="https://cdn.jsdelivr.net/npm/signature_pad@4.1.7/dist/signature_pad.umd.min.js"></script>
+  <script>
+    const canvas = document.getElementById('c');
+    const pad = new SignaturePad(canvas);
+    
+    let exported = null;
+
+    document.getElementById('draw').onclick = () => {
+      // Simulate drawing
+      pad.fromData([
+        {
+          penColor: "blue",
+          dotSize: 1,
+          minWidth: 0.5,
+          maxWidth: 2.5,
+          points: [
+            {x: 10, y: 10, time: Date.now(), pressure: 0.5},
+            {x: 50, y: 50, time: Date.now() + 16, pressure: 0.5},
+            {x: 100, y: 10, time: Date.now() + 32, pressure: 0.5}
+          ]
+        }
+      ]);
+      console.log("Drawn simulated data");
+    };
+
+    document.getElementById('export').onclick = () => {
+      exported = pad.toData();
+      console.log("EXPORTED:", JSON.stringify(exported));
+    };
+
+    document.getElementById('import').onclick = () => {
+      pad.clear();
+      
+      // Attempt to construct it EXACTLY like my React code does
+      let firmaComprimida = exported.map(stroke => ({
+          c: stroke.penColor || stroke.color || "#001999",
+          p: (stroke.points || []).map(pt => [Math.round(pt.x || 0), Math.round(pt.y || 0)])
+      }));
+
+      let reconstructedFirma = firmaComprimida.map((stroke, strokeIdx) => ({
+        penColor: stroke.c || "#001999",
+        minWidth: 0.5,
+        maxWidth: 2.5,
+        dotSize: 1.5,
+        points: stroke.p.map((pt, i) => ({ 
+          x: pt[0], 
+          y: pt[1], 
+          time: Date.now() + (strokeIdx * 1000) + (i * 16) 
+        }))
+      }));
+      
+      try {
+        console.log("RECONSTRUCTED:", JSON.stringify(reconstructedFirma));
+        pad.fromData(reconstructedFirma);
+        console.log("Import successful!");
+      } catch (e) {
+        console.error("Import failed:", e);
+      }
+    };
+  </script>
+</body>
+</html>

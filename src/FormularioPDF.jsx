@@ -60,6 +60,7 @@ const FormularioPDF = () => {
     setMode(currentMode);
 
     const data = getQueryParam('data');
+    console.log("getQueryParam data:", data);
     if (data) {
       try {
         const decompressed = LZString.decompressFromEncodedURIComponent(data);
@@ -69,31 +70,36 @@ const FormularioPDF = () => {
           // Reconstruir la firma comprimida (si existe)
           let reconstructedFirma = null;
           if (parsed.firmaComp) {
-            reconstructedFirma = parsed.firmaComp.map((stroke, strokeIdx) => ({
-              penColor: stroke.c || "#001999",
-              minWidth: 0.5,
-              maxWidth: 2.5,
-              dotSize: 1.5,
-              points: stroke.p.map((pt, i) => ({ 
-                x: pt[0], 
-                y: pt[1], 
-                time: Date.now() + (strokeIdx * 1000) + (i * 16) 
-              }))
-            }));
+            // signature_pad v2.3.2 fromData() espera Array<Array<{x, y, time, color}>>
+            reconstructedFirma = parsed.firmaComp.map((stroke, strokeIdx) => {
+              return stroke.p.map((pt, i) => ({
+                x: pt[0],
+                y: pt[1],
+                time: Date.now() + (strokeIdx * 1000) + (i * 16),
+                color: stroke.c || "#001999"
+              }));
+            });
             parsed.firmaData = reconstructedFirma;
           }
 
           // Merge para evitar campos undefined
           setFormData(prev => ({...prev, ...parsed}));
           
-          if (parsed.firmaData && sigCanvas.current) {
-            setTimeout(() => {
-              try {
-                sigCanvas.current.fromData(parsed.firmaData);
-              } catch(e) {
-                console.error("Error drawing signature", e);
-              }
-            }, 100);
+          if (parsed.firmaData) {
+            console.log("We have firmaData", parsed.firmaData.length);
+            if (sigCanvas.current) {
+              console.log("sigCanvas is present, drawing in 100ms");
+              setTimeout(() => {
+                try {
+                  sigCanvas.current.fromData(parsed.firmaData);
+                  console.log("Draw completed successfully");
+                } catch(e) {
+                  console.error("Error drawing signature", e);
+                }
+              }, 100);
+            } else {
+              console.log("sigCanvas IS NULL when step is", step);
+            }
           }
         }
       } catch (e) {
@@ -134,12 +140,19 @@ const FormularioPDF = () => {
         
       let firmaComprimida = null;
       if (currentFirmaData && Array.isArray(currentFirmaData)) {
-        firmaComprimida = currentFirmaData.map(stroke => ({
-          c: stroke.penColor || stroke.color || "#001999",
-          p: (stroke.points || [])
-            .map(pt => [Math.round(pt.x || 0), Math.round(pt.y || 0)])
-        }));
+        // En signature_pad v2.3.2, currentFirmaData es Array<Array<{x, y, time, color}>>
+        firmaComprimida = currentFirmaData.map(strokeGroup => {
+          if (Array.isArray(strokeGroup) && strokeGroup.length > 0) {
+            return {
+              c: strokeGroup[0].color || "#001999",
+              p: strokeGroup.map(pt => [Math.round(pt.x || 0), Math.round(pt.y || 0)])
+            };
+          }
+          return null;
+        }).filter(Boolean);
       }
+
+      console.log("firmaComprimida:", JSON.stringify(firmaComprimida));
 
       const safeData = { 
         nombre: sanitize(formData.nombre),
@@ -172,6 +185,8 @@ const FormularioPDF = () => {
         console.error('Error al copiar el enlace:', err);
         alert("Tu navegador bloqueó el copiado automático. Por favor, descarga el PDF directamente.");
       };
+
+      console.log("GENERATED_URL:", url);
 
       if (navigator.clipboard && window.isSecureContext) {
         navigator.clipboard.writeText(url).then(onSuccess).catch(err => {
@@ -622,9 +637,9 @@ const FormularioPDF = () => {
                       <div className="card border bg-light shadow-sm">
                         <div className="card-header bg-white d-flex justify-content-between align-items-center py-2">
                           <span className="text-muted small fw-semibold"><i className="bi bi-pen me-1"></i> Área de firma</span>
-                          <button type="button" className="btn btn-sm btn-outline-danger py-1" onClick={clearSignature} title="Limpiar y volver a firmar">
-                            <i className="bi bi-eraser-fill"></i> Limpiar
-                          </button>
+                          <button type="button" className="btn btn-sm btn-outline-danger d-flex align-items-center gap-1" onClick={() => sigCanvas.current && sigCanvas.current.clear()}>
+                          <i className="bi bi-eraser-fill"></i> Limpiar
+                        </button>
                         </div>
                         <div className="card-body p-0 d-flex justify-content-center bg-white" style={{ borderRadius: '0 0 var(--bs-border-radius) var(--bs-border-radius)' }}>
                           <SignatureCanvas 
