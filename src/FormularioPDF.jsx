@@ -70,7 +70,10 @@ const FormularioPDF = () => {
           let reconstructedFirma = null;
           if (parsed.firmaComp) {
             reconstructedFirma = parsed.firmaComp.map(stroke => ({
-              color: stroke.c || "#001999",
+              penColor: stroke.c || "#001999",
+              minWidth: 0.5,
+              maxWidth: 2.5,
+              dotSize: 1.5,
               points: stroke.p.map(pt => ({ x: pt[0], y: pt[1], time: Date.now() }))
             }));
             parsed.firmaData = reconstructedFirma;
@@ -81,7 +84,11 @@ const FormularioPDF = () => {
           
           if (parsed.firmaData && sigCanvas.current) {
             setTimeout(() => {
-              sigCanvas.current.fromData(parsed.firmaData);
+              try {
+                sigCanvas.current.fromData(parsed.firmaData);
+              } catch(e) {
+                console.error("Error drawing signature", e);
+              }
             }, 100);
           }
         }
