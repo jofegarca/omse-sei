@@ -69,12 +69,16 @@ const FormularioPDF = () => {
           // Reconstruir la firma comprimida (si existe)
           let reconstructedFirma = null;
           if (parsed.firmaComp) {
-            reconstructedFirma = parsed.firmaComp.map(stroke => ({
+            reconstructedFirma = parsed.firmaComp.map((stroke, strokeIdx) => ({
               penColor: stroke.c || "#001999",
               minWidth: 0.5,
               maxWidth: 2.5,
               dotSize: 1.5,
-              points: stroke.p.map(pt => ({ x: pt[0], y: pt[1], time: Date.now() }))
+              points: stroke.p.map((pt, i) => ({ 
+                x: pt[0], 
+                y: pt[1], 
+                time: Date.now() + (strokeIdx * 1000) + (i * 16) 
+              }))
             }));
             parsed.firmaData = reconstructedFirma;
           }
