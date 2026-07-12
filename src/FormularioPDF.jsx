@@ -116,55 +116,85 @@ const FormularioPDF = () => {
   };
 
   const handleCopyLink = () => {
-    const currentFirmaData = sigCanvas.current && !sigCanvas.current.isEmpty() 
-      ? sigCanvas.current.toData() 
-      : null;
-      
-    // Comprimir radicalmente la firma para que el enlace sea muy corto y soporte WhatsApp
-    let firmaComprimida = null;
-    if (currentFirmaData) {
-      firmaComprimida = currentFirmaData.map(stroke => ({
-        c: stroke.color, // solo color
-        // Solo guardar 1 de cada 2 puntos y sin el atributo "time", convirtiendolo en arreglo simple [x,y]
-        p: stroke.points
-          .filter((_, i) => i % 2 === 0)
-          .map(pt => [Math.round(pt.x), Math.round(pt.y)])
-      }));
-    }
+    try {
+      const currentFirmaData = sigCanvas.current && !sigCanvas.current.isEmpty() 
+        ? sigCanvas.current.toData() 
+        : null;
+        
+      let firmaComprimida = null;
+      if (currentFirmaData && Array.isArray(currentFirmaData)) {
+        firmaComprimida = currentFirmaData.map(stroke => ({
+          c: stroke.penColor || stroke.color || "#001999",
+          p: (stroke.points || [])
+            .filter((_, i) => i % 2 === 0)
+            .map(pt => [Math.round(pt.x || 0), Math.round(pt.y || 0)])
+        }));
+      }
 
-    // Sanitizamos todos los datos antes de exportarlos a la URL
-    const safeData = { 
-      nombre: sanitize(formData.nombre),
-      direccion: sanitize(formData.direccion),
-      correo: sanitize(formData.correo),
-      telefono: sanitize(formData.telefono),
-      ubicacion: sanitize(formData.ubicacion),
-      fecha: sanitize(formData.fecha),
-      voluntariado: sanitize(formData.voluntariado),
-      otroVoluntariado: sanitize(formData.otroVoluntariado),
-      nombreRepresentante: sanitize(formData.nombreRepresentante),
-      telefonoRepresentante: sanitize(formData.telefonoRepresentante),
-      correoRepresentante: sanitize(formData.correoRepresentante),
-      firmaComp: firmaComprimida // Enviamos la version ligera
-    };
-    
-    const compressedData = LZString.compressToEncodedURIComponent(JSON.stringify(safeData));
-    
-    // Método ultra-compatible de generar la URL final
-    let baseUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
-    let url = baseUrl + "?data=" + compressedData;
-    // Si hay que mantener el modo, agregarlo
-    if (mode === 'ppc') url += "&ref=ppc";
-    else if (mode === 'pp') url += "&ref=pp";
-    
-    navigator.clipboard.writeText(url).then(() => {
-      setToastMessage('Enlace copiado al portapapeles');
-      setTimeout(() => setToastMessage(''), 3000);
-    }).catch(err => {
-      console.error('Error al copiar el enlace:', err);
-      setToastMessage('Error al copiar el enlace');
-      setTimeout(() => setToastMessage(''), 3000);
-    });
+      const safeData = { 
+        nombre: sanitize(formData.nombre),
+        direccion: sanitize(formData.direccion),
+        correo: sanitize(formData.correo),
+        telefono: sanitize(formData.telefono),
+        ubicacion: sanitize(formData.ubicacion),
+        fecha: sanitize(formData.fecha),
+        voluntariado: sanitize(formData.voluntariado),
+        otroVoluntariado: sanitize(formData.otroVoluntariado),
+        nombreRepresentante: sanitize(formData.nombreRepresentante),
+        telefonoRepresentante: sanitize(formData.telefonoRepresentante),
+        correoRepresentante: sanitize(formData.correoRepresentante),
+        firmaComp: firmaComprimida
+      };
+      
+      const compressedData = LZString.compressToEncodedURIComponent(JSON.stringify(safeData));
+      
+      let baseUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+      let url = baseUrl + "?data=" + compressedData;
+      if (mode === 'ppc') url += "&ref=ppc";
+      else if (mode === 'pp') url += "&ref=pp";
+      
+      const onSuccess = () => {
+        setToastMessage('Enlace copiado al portapapeles');
+        setTimeout(() => setToastMessage(''), 3000);
+      };
+
+      const onError = (err) => {
+        console.error('Error al copiar el enlace:', err);
+        alert("Tu navegador bloqueó el copiado automático. Por favor, descarga el PDF directamente.");
+      };
+
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url).then(onSuccess).catch(err => {
+          fallbackCopy(url, onSuccess, onError);
+        });
+      } else {
+        fallbackCopy(url, onSuccess, onError);
+      }
+    } catch (e) {
+      console.error("Critical error in copy link:", e);
+      alert("Ocurrió un error inesperado al procesar el enlace. Intenta vaciar y volver a hacer la firma.");
+    }
+  };
+
+  const fallbackCopy = (text, onSuccess, onError) => {
+    let textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.position = "fixed";
+    textArea.style.left = "-999999px";
+    textArea.style.top = "-999999px";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      if (document.execCommand('copy')) {
+        onSuccess();
+      } else {
+        onError();
+      }
+    } catch (err) {
+      onError(err);
+    }
+    textArea.remove();
   };
 
   const fillPDF = async () => {
