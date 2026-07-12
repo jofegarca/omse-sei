@@ -137,7 +137,6 @@ const FormularioPDF = () => {
         firmaComprimida = currentFirmaData.map(stroke => ({
           c: stroke.penColor || stroke.color || "#001999",
           p: (stroke.points || [])
-            .filter((_, i) => i % 2 === 0)
             .map(pt => [Math.round(pt.x || 0), Math.round(pt.y || 0)])
         }));
       }
@@ -631,6 +630,7 @@ const FormularioPDF = () => {
                           <SignatureCanvas 
                             ref={sigCanvas} 
                             onEnd={handleSignatureEnd}
+                            clearOnResize={false}
                             canvasProps={{ 
                               className: 'signature-canvas w-100', 
                               style: { height: '200px', cursor: 'crosshair', touchAction: 'none' } 

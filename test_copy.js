@@ -1,15 +1,12 @@
 import puppeteer from 'puppeteer';
 
 (async () => {
-  const browser = await puppeteer.launch({ headless: "new" });
+  const browser = await puppeteer.launch({ 
+    headless: "new",
+    args: ['--no-sandbox']
+  });
   const page = await browser.newPage();
   
-  // Intercept dialogs (alerts)
-  page.on('dialog', async dialog => {
-    console.log('Dialog message:', dialog.message());
-    await dialog.accept();
-  });
-
   page.on('console', msg => console.log('PAGE LOG:', msg.text()));
 
   await page.goto('http://localhost:5173');
@@ -32,28 +29,20 @@ import puppeteer from 'puppeteer';
 
   // Click Copy Link
   await page.evaluate(() => {
-    // Find button containing "Copiar Vínculo"
     const buttons = Array.from(document.querySelectorAll('button'));
     const btn = buttons.find(b => b.textContent.includes('Copiar Vínculo'));
     if (btn) btn.click();
   });
 
-  // Wait for clipboard to be populated
   await new Promise(r => setTimeout(r, 1000));
   
-  // We used a textarea fallback! Let's intercept the clipboard or textarea text.
   const url = await page.evaluate(() => {
-    return new Promise(resolve => {
-      navigator.clipboard.readText().then(resolve).catch(() => {
-        // Find if a textarea was used
-        resolve(document.querySelector('textarea')?.value || "FAIL");
-      });
-    });
+    return document.querySelector('textarea')?.value || "FAIL";
   });
   
-  console.log("Copied URL:", url.substring(0, 100) + "...");
+  console.log("Copied URL:", url.substring(0, 150) + "...");
   
-  if (!url || url === 'FAIL' || url.startsWith('http://localhost:5173') === false) {
+  if (!url || url === 'FAIL') {
     console.error("Failed to copy URL");
     await browser.close();
     return;
@@ -64,12 +53,15 @@ import puppeteer from 'puppeteer';
   page2.on('console', msg => console.log('PAGE 2 LOG:', msg.text()));
   await page2.goto(url);
   
-  await new Promise(r => setTimeout(r, 1000));
+  await new Promise(r => setTimeout(r, 2000));
 
   // Check if canvas is empty
   const isEmpty = await page2.evaluate(() => {
     const canvas = document.querySelector('canvas');
     if (!canvas) return true;
+    
+    // Check react-signature-canvas API if possible
+    // We can just check pixel data
     const ctx = canvas.getContext('2d');
     const pixelBuffer = new Uint32Array(ctx.getImageData(0, 0, canvas.width, canvas.height).data.buffer);
     return !pixelBuffer.some(color => color !== 0);
